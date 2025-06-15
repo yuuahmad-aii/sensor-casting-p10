@@ -39,6 +39,10 @@
 /* USER CODE BEGIN PD */
 #define MIN_TEMP 0
 #define MAX_TEMP 800
+// Definisikan threshold suhu untuk buzzer
+#define BUZZER_THRESHOLD 100.0f
+// Jika ingin mengabaikan bit fault, gunakan define berikut:
+#define IGNORE_MAX31855_FAULT_BIT 1
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -58,27 +62,36 @@ TIM_HandleTypeDef htim3;
 /* Definitions for P10Task */
 osThreadId_t P10TaskHandle;
 const osThreadAttr_t P10Task_attributes = {
-  .name = "P10Task",
-  .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
+    .name = "P10Task",
+    .stack_size = 256 * 4,
+    .priority = (osPriority_t)osPriorityNormal,
 };
 /* Definitions for SensorTask */
 osThreadId_t SensorTaskHandle;
 const osThreadAttr_t SensorTask_attributes = {
-  .name = "SensorTask",
-  .stack_size = 256 * 4,
-  .priority = (osPriority_t) osPriorityLow,
+    .name = "SensorTask",
+    .stack_size = 256 * 4,
+    .priority = (osPriority_t)osPriorityLow,
+};
+/* Definitions for BuzzerTask */
+osThreadId_t BuzzerTaskHandle;
+const osThreadAttr_t BuzzerTask_attributes = {
+    .name = "BuzzerTask",
+    .stack_size = 128 * 4,
+    .priority = (osPriority_t)osPriorityLow,
 };
 /* Definitions for TempQueue */
 osMessageQueueId_t TempQueueHandle;
 const osMessageQueueAttr_t TempQueue_attributes = {
-  .name = "TempQueue"
-};
+    .name = "TempQueue"};
+/* Definitions for BuzzerQueue */
+osMessageQueueId_t BuzzerQueueHandle;
+const osMessageQueueAttr_t BuzzerQueue_attributes = {
+    .name = "BuzzerQueue"};
 /* Definitions for framebufferMutex */
 osMutexId_t framebufferMutexHandle;
 const osMutexAttr_t framebufferMutex_attributes = {
-  .name = "framebufferMutex"
-};
+    .name = "framebufferMutex"};
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -93,6 +106,7 @@ static void MX_RTC_Init(void);
 static void MX_TIM3_Init(void);
 void StartP10Task(void *argument);
 void StartSensorTask(void *argument);
+void StartBuzzerTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 float read_max31855(void);
@@ -104,9 +118,9 @@ float read_max31855(void);
 /* USER CODE END 0 */
 
 /**
-  * @brief  The application entry point.
-  * @retval int
-  */
+ * @brief  The application entry point.
+ * @retval int
+ */
 int main(void)
 {
 
@@ -140,87 +154,79 @@ int main(void)
   /* USER CODE BEGIN 2 */
   //  MX_USB_DEVICE_Init();
 
-   // Inisialisasi panel DMD: 1 panel lebar, 1 panel tinggi
-   initPanel(1, 1);
-   setBrightness(50);
-   scanDisplayBySPI();
+  // Inisialisasi panel DMD: 1 panel lebar, 1 panel tinggi
+  initPanel(1, 1);
+  setBrightness(50);
+  scanDisplayBySPI();
+  /* USER CODE END 2 */
 
-   HAL_Delay(5000);
+  /* Init scheduler */
+  osKernelInitialize();
+  /* Create the mutex(es) */
+  /* creation of framebufferMutex */
+  framebufferMutexHandle = osMutexNew(&framebufferMutex_attributes);
 
-   // Pilih font, misal Arial_Black_16
-   selectFont(Arial_Black_16);
+  /* USER CODE BEGIN RTOS_MUTEX */
+  /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
 
-   // Bersihkan layar
-   clearScreen(true);
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
 
-   // Tampilkan string pada posisi (x=0, y=0)
-   drawString(0, 0, "HELLO", 5, GRAPHICS_NORMAL);
-   drawString(0, 10, "STM32", 5, GRAPHICS_NORMAL);
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
 
-   HAL_Delay(5000);
-   /* USER CODE END 2 */
+  /* Create the queue(s) */
+  /* creation of TempQueue */
+  TempQueueHandle = osMessageQueueNew(4, sizeof(float), &TempQueue_attributes);
 
-   /* Init scheduler */
-   osKernelInitialize();
-   /* Create the mutex(es) */
-   /* creation of framebufferMutex */
-   framebufferMutexHandle = osMutexNew(&framebufferMutex_attributes);
+  /* creation of BuzzerQueue */
+  BuzzerQueueHandle = osMessageQueueNew(4, sizeof(float), &BuzzerQueue_attributes);
 
-   /* USER CODE BEGIN RTOS_MUTEX */
-   /* add mutexes, ... */
-   /* USER CODE END RTOS_MUTEX */
+  /* USER CODE BEGIN RTOS_QUEUES */
+  /* add queues, ... */
+  /* USER CODE END RTOS_QUEUES */
 
-   /* USER CODE BEGIN RTOS_SEMAPHORES */
-   /* add semaphores, ... */
-   /* USER CODE END RTOS_SEMAPHORES */
+  /* Create the thread(s) */
+  /* creation of P10Task */
+  P10TaskHandle = osThreadNew(StartP10Task, NULL, &P10Task_attributes);
 
-   /* USER CODE BEGIN RTOS_TIMERS */
-   /* start timers, add new ones, ... */
-   /* USER CODE END RTOS_TIMERS */
+  /* creation of SensorTask */
+  SensorTaskHandle = osThreadNew(StartSensorTask, NULL, &SensorTask_attributes);
 
-   /* Create the queue(s) */
-   /* creation of TempQueue */
-   TempQueueHandle = osMessageQueueNew(4, sizeof(float), &TempQueue_attributes);
+  /* creation of BuzzerTask */
+  BuzzerTaskHandle = osThreadNew(StartBuzzerTask, NULL, &BuzzerTask_attributes);
 
-   /* USER CODE BEGIN RTOS_QUEUES */
-   /* add queues, ... */
-   /* USER CODE END RTOS_QUEUES */
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+  /* USER CODE END RTOS_THREADS */
 
-   /* Create the thread(s) */
-   /* creation of P10Task */
-   P10TaskHandle = osThreadNew(StartP10Task, NULL, &P10Task_attributes);
+  /* USER CODE BEGIN RTOS_EVENTS */
+  /* add events, ... */
+  /* USER CODE END RTOS_EVENTS */
 
-   /* creation of SensorTask */
-   SensorTaskHandle = osThreadNew(StartSensorTask, NULL, &SensorTask_attributes);
+  /* Start scheduler */
+  osKernelStart();
 
-   /* USER CODE BEGIN RTOS_THREADS */
-   /* add threads, ... */
-   /* USER CODE END RTOS_THREADS */
+  /* We should never get here as control is now taken by the scheduler */
 
-   /* USER CODE BEGIN RTOS_EVENTS */
-   /* add events, ... */
-   /* USER CODE END RTOS_EVENTS */
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    /* USER CODE END WHILE */
 
-   /* Start scheduler */
-   osKernelStart();
-
-   /* We should never get here as control is now taken by the scheduler */
-
-   /* Infinite loop */
-   /* USER CODE BEGIN WHILE */
-   while (1)
-   {
-     /* USER CODE END WHILE */
-
-     /* USER CODE BEGIN 3 */
-   }
+    /* USER CODE BEGIN 3 */
+  }
   /* USER CODE END 3 */
 }
 
 /**
-  * @brief System Clock Configuration
-  * @retval None
-  */
+ * @brief System Clock Configuration
+ * @retval None
+ */
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
@@ -228,9 +234,9 @@ void SystemClock_Config(void)
   RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
   /** Initializes the RCC Oscillators according to the specified parameters
-  * in the RCC_OscInitTypeDef structure.
-  */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI|RCC_OSCILLATORTYPE_HSE;
+   * in the RCC_OscInitTypeDef structure.
+   */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_LSI | RCC_OSCILLATORTYPE_HSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
@@ -244,9 +250,8 @@ void SystemClock_Config(void)
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
-  */
-  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
-                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+   */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
@@ -256,7 +261,7 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_RTC|RCC_PERIPHCLK_USB;
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_RTC | RCC_PERIPHCLK_USB;
   PeriphClkInit.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
   PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_PLL_DIV1_5;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
@@ -266,10 +271,10 @@ void SystemClock_Config(void)
 }
 
 /**
-  * @brief RTC Initialization Function
-  * @param None
-  * @retval None
-  */
+ * @brief RTC Initialization Function
+ * @param None
+ * @retval None
+ */
 static void MX_RTC_Init(void)
 {
 
@@ -285,7 +290,7 @@ static void MX_RTC_Init(void)
   /* USER CODE END RTC_Init 1 */
 
   /** Initialize RTC Only
-  */
+   */
   hrtc.Instance = RTC;
   hrtc.Init.AsynchPrediv = RTC_AUTO_1_SECOND;
   hrtc.Init.OutPut = RTC_OUTPUTSOURCE_ALARM;
@@ -299,7 +304,7 @@ static void MX_RTC_Init(void)
   /* USER CODE END Check_RTC_BKUP */
 
   /** Initialize RTC and set the Time and Date
-  */
+   */
   sTime.Hours = 0x0;
   sTime.Minutes = 0x0;
   sTime.Seconds = 0x0;
@@ -320,14 +325,13 @@ static void MX_RTC_Init(void)
   /* USER CODE BEGIN RTC_Init 2 */
 
   /* USER CODE END RTC_Init 2 */
-
 }
 
 /**
-  * @brief SPI1 Initialization Function
-  * @param None
-  * @retval None
-  */
+ * @brief SPI1 Initialization Function
+ * @param None
+ * @retval None
+ */
 static void MX_SPI1_Init(void)
 {
 
@@ -358,14 +362,13 @@ static void MX_SPI1_Init(void)
   /* USER CODE BEGIN SPI1_Init 2 */
 
   /* USER CODE END SPI1_Init 2 */
-
 }
 
 /**
-  * @brief SPI2 Initialization Function
-  * @param None
-  * @retval None
-  */
+ * @brief SPI2 Initialization Function
+ * @param None
+ * @retval None
+ */
 static void MX_SPI2_Init(void)
 {
 
@@ -396,14 +399,13 @@ static void MX_SPI2_Init(void)
   /* USER CODE BEGIN SPI2_Init 2 */
 
   /* USER CODE END SPI2_Init 2 */
-
 }
 
 /**
-  * @brief TIM2 Initialization Function
-  * @param None
-  * @retval None
-  */
+ * @brief TIM2 Initialization Function
+ * @param None
+ * @retval None
+ */
 static void MX_TIM2_Init(void)
 {
 
@@ -455,14 +457,13 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 2 */
   HAL_TIM_MspPostInit(&htim2);
-
 }
 
 /**
-  * @brief TIM3 Initialization Function
-  * @param None
-  * @retval None
-  */
+ * @brief TIM3 Initialization Function
+ * @param None
+ * @retval None
+ */
 static void MX_TIM3_Init(void)
 {
 
@@ -500,14 +501,13 @@ static void MX_TIM3_Init(void)
   /* USER CODE BEGIN TIM3_Init 2 */
 
   /* USER CODE END TIM3_Init 2 */
-
 }
 
 /**
-  * @brief GPIO Initialization Function
-  * @param None
-  * @retval None
-  */
+ * @brief GPIO Initialization Function
+ * @param None
+ * @retval None
+ */
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
@@ -522,10 +522,10 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, P10_A_Pin|P10_B_Pin|P10_LAT_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, P10_A_Pin | P10_B_Pin | P10_LAT_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, USER_LED_Pin|MAX_CS_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, USER_LED_Pin | MAX_CS_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : USER_BTN_Pin */
   GPIO_InitStruct.Pin = USER_BTN_Pin;
@@ -534,14 +534,14 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(USER_BTN_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : P10_A_Pin P10_B_Pin P10_LAT_Pin */
-  GPIO_InitStruct.Pin = P10_A_Pin|P10_B_Pin|P10_LAT_Pin;
+  GPIO_InitStruct.Pin = P10_A_Pin | P10_B_Pin | P10_LAT_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : USER_LED_Pin MAX_CS_Pin */
-  GPIO_InitStruct.Pin = USER_LED_Pin|MAX_CS_Pin;
+  GPIO_InitStruct.Pin = USER_LED_Pin | MAX_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -574,12 +574,14 @@ float read_max31855(void)
     // Tarik CS ke HIGH untuk menonaktifkan sensor
     HAL_GPIO_WritePin(MAX_CS_GPIO_Port, MAX_CS_Pin, GPIO_PIN_SET);
 
+#if !IGNORE_MAX31855_FAULT_BIT
     // Cek bit 16 untuk fault (Open Circuit, Short to GND, Short to VCC)
     if (rx_data[1] & 0x01)
     {
       // Ada fault pada thermocouple
       return -100.0; // Kode error untuk open circuit
     }
+#endif
 
     // Ambil data suhu (14 bit, MSB ada di byte 0)
     temp_data = (rx_data[0] << 6) | (rx_data[1] >> 2);
@@ -599,15 +601,15 @@ float read_max31855(void)
 
 /* USER CODE BEGIN Header_StartP10Task */
 /**
-  * @brief  Function implementing the P10Task thread.
-  * @param  argument: Not used
-  * @retval None
-  */
+ * @brief  Function implementing the P10Task thread.
+ * @param  argument: Not used
+ * @retval None
+ */
 /* USER CODE END Header_StartP10Task */
 void StartP10Task(void *argument)
 {
   /* init code for USB_DEVICE */
-  // MX_USB_DEVICE_Init();
+  MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 5 */
 
   // 1. Mulai PWM pada TIM2 untuk mengontrol pin Output Enable (kecerahan)
@@ -660,36 +662,101 @@ void StartP10Task(void *argument)
 
 /* USER CODE BEGIN Header_StartSensorTask */
 /**
-* @brief Function implementing the SensorTask thread.
-* @param argument: Not used
-* @retval None
-*/
+ * @brief Function implementing the SensorTask thread.
+ * @param argument: Not used
+ * @retval None
+ */
 /* USER CODE END Header_StartSensorTask */
 void StartSensorTask(void *argument)
 {
   /* USER CODE BEGIN StartSensorTask */
   /* Infinite loop */
-  for(;;)
+  for (;;)
   {
     float current_temp = read_max31855();
 
     // Kirim suhu ke queue
     osMessageQueuePut(TempQueueHandle, &current_temp, 0U, 0U);
+    // Kirim suhu ke queue untuk Buzzer
+    osMessageQueuePut(BuzzerQueueHandle, &current_temp, 0U, 0U);
 
     // Tunggu 1 detik sebelum pembacaan berikutnya
-    osDelay(1000);
+    osDelay(500); // 500 ms
   }
   /* USER CODE END StartSensorTask */
 }
 
+/* USER CODE BEGIN Header_StartBuzzerTask */
 /**
-  * @brief  Period elapsed callback in non blocking mode
-  * @note   This function is called  when TIM4 interrupt took place, inside
-  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
-  * a global variable "uwTick" used as application time base.
-  * @param  htim : TIM handle
-  * @retval None
-  */
+ * @brief Function implementing the BuzzerTask thread.
+ * @param argument: Not used
+ * @retval None
+ */
+/* USER CODE END Header_StartBuzzerTask */
+void StartBuzzerTask(void *argument)
+{
+  /* USER CODE BEGIN StartBuzzerTask */
+  float temperature;
+  /* Infinite loop */
+  for (;;)
+  {
+    // Tunggu data suhu baru dari queue
+    if (osMessageQueueGet(BuzzerQueueHandle, &temperature, NULL, osWaitForever) == osOK)
+    {
+      if (temperature >= BUZZER_THRESHOLD)
+      {
+        // Suhu di atas atau sama dengan threshold, bunyikan buzzer
+        float range = MAX_TEMP - BUZZER_THRESHOLD;
+        int delay_ms = 0;
+
+        if (temperature < MAX_TEMP && range > 0)
+        {
+          // Hitung delay berdasarkan seberapa dekat suhu ke MAX_TEMP
+          // Semakin dekat, semakin kecil delay (bunyi makin cepat)
+          // Rumus: y = y_max - ( (x - x_min) / (x_max - x_min) ) * y_max
+          // y = delay, x = temperature
+          delay_ms = 2000 - (int)(((temperature - BUZZER_THRESHOLD) / range) * 2000.0f);
+        }
+
+        // Pastikan delay tidak negatif
+        if (delay_ms < 0)
+        {
+          delay_ms = 0;
+        }
+
+        // Bunyikan buzzer
+        HAL_GPIO_WritePin(USER_LED_GPIO_Port, USER_LED_Pin, GPIO_PIN_SET);
+
+        if (delay_ms > 0)
+        {
+          // Jika delay > 0, buat suara beep (berkedip)
+          osDelay(100); // Durasi beep 100ms
+          HAL_GPIO_WritePin(USER_LED_GPIO_Port, USER_LED_Pin, GPIO_PIN_RESET);
+          osDelay(delay_ms); // Jeda antar beep
+        }
+        // Jika delay_ms adalah 0, buzzer akan tetap menyala karena tidak pernah di-RESET di dalam loop ini
+        // hingga suhu turun di bawah threshold
+      }
+      else
+      {
+        // Suhu di bawah threshold, matikan buzzer
+        HAL_GPIO_WritePin(USER_LED_GPIO_Port, USER_LED_Pin, GPIO_PIN_RESET);
+        // Beri sedikit delay agar task tidak sibuk jika tidak ada data baru (meskipun Get akan block)
+        osDelay(100);
+      }
+    }
+  }
+  /* USER CODE END StartBuzzerTask */
+}
+
+/**
+ * @brief  Period elapsed callback in non blocking mode
+ * @note   This function is called  when TIM4 interrupt took place, inside
+ * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+ * a global variable "uwTick" used as application time base.
+ * @param  htim : TIM handle
+ * @retval None
+ */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   /* USER CODE BEGIN Callback 0 */
@@ -711,9 +778,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 }
 
 /**
-  * @brief  This function is executed in case of error occurrence.
-  * @retval None
-  */
+ * @brief  This function is executed in case of error occurrence.
+ * @retval None
+ */
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
@@ -725,14 +792,14 @@ void Error_Handler(void)
   /* USER CODE END Error_Handler_Debug */
 }
 
-#ifdef  USE_FULL_ASSERT
+#ifdef USE_FULL_ASSERT
 /**
-  * @brief  Reports the name of the source file and the source line number
-  *         where the assert_param error has occurred.
-  * @param  file: pointer to the source file name
-  * @param  line: assert_param error line source number
-  * @retval None
-  */
+ * @brief  Reports the name of the source file and the source line number
+ *         where the assert_param error has occurred.
+ * @param  file: pointer to the source file name
+ * @param  line: assert_param error line source number
+ * @retval None
+ */
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
